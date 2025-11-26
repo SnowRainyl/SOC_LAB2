@@ -72,6 +72,7 @@ volatile uint8_t isr_flags = 0;
 // Commands that we will receive from the PC
 const uint8_t COMMAND_CHANGE_FREQ[] = "changefreq"; // Change the frequency
 const uint8_t COMMAND_STOP[]        = "stop"; // Go to stop mode
+const uint8_t COMMAND_ACCON[]       = "accon"; // Accelerometer on
 
 // Buffer for command
 static uint8_t line_ready_buffer[LINE_BUFFER_SIZE]; // Stable buffer for main
@@ -217,6 +218,7 @@ static uint32_t line_len = 0;
 void CDC_ReceiveCallBack(uint8_t *buf, uint32_t len)
 {
   // Prevent overflow, does not handle the command
+  //处理溢出太激进，可以改成环形缓冲区
   if (line_len + len >= LINE_BUFFER_SIZE)
   {
     line_len = 0;
@@ -231,21 +233,21 @@ void CDC_ReceiveCallBack(uint8_t *buf, uint32_t len)
   while (1)
   {
     // Look for '\n' or '\r' inside line_buffer
-    uint8_t *line_feed = memchr(line_buffer, '\n', line_len);
+    uint8_t *line_feed = memchr(line_buffer, '\n', line_len);//在buffer中查找有没有\n
     if (line_feed == NULL){
-      line_feed = memchr(line_buffer, '\r', line_len);
+      line_feed = memchr(line_buffer, '\r', line_len);//在buffer中查找有没有\r
       if (line_feed == NULL)
       break;
     }
 
     // Replace \n or \r by terminator
-    *line_feed = '\0';
+    *line_feed = '\0';//将\n或\r替换为字符串结束符
 
     // Remove optional '\r' in case input was \r\n
-    if (line_feed > line_buffer && *(line_feed - 1) == '\r')
+    if (line_feed > line_buffer && *(line_feed - 1) == '\r')//如果输入是\r\n，去掉多余的\r
     *(line_feed - 1) = '\0';
 
-    uint32_t processed = (line_feed + 1) - line_buffer;
+    uint32_t processed = (line_feed + 1) - line_buffer; //计算处理了多少字节
 
     // Signal the main that there is a new line ready to be checked
     memcpy(line_ready_buffer, line_buffer, processed);
@@ -265,7 +267,7 @@ void handle_new_line()
 {
   if (memcmp(line_ready_buffer, COMMAND_CHANGE_FREQ, sizeof(COMMAND_CHANGE_FREQ)) == 0)
   {
-    change_freq();
+    //change_freq();
   }
 
   else if (memcmp(line_ready_buffer, COMMAND_STOP, sizeof(COMMAND_STOP)) == 0)
@@ -273,6 +275,31 @@ void handle_new_line()
     go_to_stop();
   }
 
+  else if (memcmp(line_ready_buffer, COMMAND_ACCON, sizeof(COMMAND_ACCON)) == 0)
+  {
+    // Other commands can be added here
+    BSP_ACCELERO_Init();
+    uint8_t msg[] = "Accelerometer initialized\r\n";
+    CDC_Transmit_FS(msg, strlen((char*)msg));
+
+    //开启定时器触发中断，中断里检查xyz值
+
+
+    int16_t buffer[3] = {0};
+    BSP_ACCELERO_GetXYZ(buffer); // 读取 X, Y, Z
+
+// 简单阈值判断，比如倾斜超过一定角度
+  if (abs(buffer[0]) > abs(buffer[1]) && abs(buffer[0]) > 1000) {
+    if (buffer[0] > 0) {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET); // 亮红灯
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET); // 灭绿灯
+    } else {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET); // 亮绿灯
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET); // 灭红灯
+    }
+    }
+
+  }
   else
   {
     // If we receive an unknown command, we send an error message back to the PC
@@ -300,6 +327,8 @@ void go_to_stop()
 {
   // TODO: Make sure all user LEDS are off
   // To avoid noise during stop mode
+  uint8_t msg[] = "Going to STOP mode...\r\n";
+  CDC_Transmit_FS(msg, strlen((char*)msg));
   cs43l22_stop();
 
   // Required otherwise the audio wont work after wakeup

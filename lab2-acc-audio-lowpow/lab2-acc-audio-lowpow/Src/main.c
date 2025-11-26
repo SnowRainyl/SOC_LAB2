@@ -21,8 +21,8 @@
 #include "dma.h"
 #include "i2c.h"
 #include "i2s.h"
-#include "spi.h"
 #include "tim.h"
+#include "spi.h"
 #include "usb_device.h"
 #include "gpio.h"
 
@@ -65,19 +65,20 @@
 const uint8_t ISR_FLAG_RX    = 0x01;  // Received data
 const uint8_t ISR_FLAG_TIM10 = 0x02;  // Timer 10 Period elapsed
 const uint8_t ISR_FLAG_TIM11 = 0x04;  // Timer 10 Period elapsed
+
 extern TIM_HandleTypeDef htim10;
 extern volatile uint8_t isr_flags;
 volatile uint32_t pwm_period = 5000; // 
-volatile float duty_cycle = 0.5f;    // 默认 50%
-volatile uint8_t led_state = 0;      // 0:灭, 1:亮
+volatile float duty_cycle = 0.5f;    // initial 50%
+volatile uint8_t led_state = 0;      // 0:off, 1:on
 // This is the only variable that we will modify both in the ISR and in the main loop
 // It has to be declared volatile to prevent the compiler from optimizing it out.
 volatile uint8_t isr_flags = 0;
-
 // Commands that we will receive from the PC
-const uint8_t COMMAND_CHANGE_FREQ[] = "changefreq"; // Change the frequency
+
 const uint8_t COMMAND_STOP[]        = "stop"; // Go to stop mode
 const uint8_t COMMAND_CHANGE_DUT[]  = "changedut";
+const uint8_t COMMAND_CHANGE_FREQ[] = "changefreq"; // Change the frequency
 // Buffer for command
 static uint8_t line_ready_buffer[LINE_BUFFER_SIZE]; // Stable buffer for main
 
@@ -167,6 +168,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
     if (isr_flags & ISR_FLAG_TIM10)
 {
     isr_flags &= ~ISR_FLAG_TIM10;
@@ -222,28 +224,7 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-// 1. 定时器回调函数 (CubeMX 生成的中断入口会调用这个)
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-    if (htim->Instance == TIM10) {
-        isr_flags |= ISR_FLAG_TIM10; // 仅置位标志位，快速退出中断
-    }
-}
-void handle_timer10_pwm(void)
-{
-    led_state = !led_state; // 翻转状态
 
-    // 也就是 PD12 (绿色 LED)
-    if (led_state) {
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
-        // 下一次中断的时间 = 周期 * 占空比
-        __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * duty_cycle));
-    } else {
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
-        // 下一次中断的时间 = 周期 * (1 - 占空比)
-        __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * (1.0f - duty_cycle)));
-    }
-}
 // All of this is used to manage commands from serial interface
 static uint8_t line_buffer[LINE_BUFFER_SIZE];
 static uint32_t line_len = 0;
@@ -290,11 +271,33 @@ void CDC_ReceiveCallBack(uint8_t *buf, uint32_t len)
   }
 }
 
+/*PWM_changefreq*/
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM10) {
+        isr_flags |= ISR_FLAG_TIM10; // only set the flag, quickly exit interrupt
+    }
+}
+void handle_timer10_pwm(void)
+{
+    led_state = !led_state; // toggle state
+
+    // That is PD12 (Green LED)
+    if (led_state) {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
+        // Next interrupt time = period * duty cycle
+        __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * duty_cycle));
+    } else {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
+        // Next interrupt time = period * (1 - duty cycle)
+        __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * (1.0f - duty_cycle)));
+    }
+}
+
 /**
 * @brief  Handle possible new command
 * @retval None
 */
-
 void change_freq()
 {
   static uint8_t freq_state = 0;
@@ -317,7 +320,6 @@ void change_freq()
       break;
   }
 }
-
 void handle_new_line()
 {
   if (memcmp(line_ready_buffer, COMMAND_CHANGE_FREQ, sizeof(COMMAND_CHANGE_FREQ)) == 0)
@@ -329,10 +331,9 @@ void handle_new_line()
   {
     go_to_stop();
   }
-
   else if (memcmp(line_ready_buffer, COMMAND_CHANGE_DUT, sizeof(COMMAND_CHANGE_DUT)-1) == 0)
   {
-    // 切换占空比: 50% -> 75% -> 25%
+    // Change duty cycle: 50% -> 75% -> 25%
     if (duty_cycle == 0.5f) duty_cycle = 0.75f;
     else if (duty_cycle == 0.75f) duty_cycle = 0.25f;
     else duty_cycle = 0.5f;
@@ -344,6 +345,7 @@ void handle_new_line()
     // If we receive an unknown command, we send an error message back to the PC
     CDC_Transmit_FS((uint8_t*)"Unknown command\r\n", 17);
   }
+  
 }
 
 void init_codec_and_play()

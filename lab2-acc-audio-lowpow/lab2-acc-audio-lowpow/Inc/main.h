@@ -71,6 +71,9 @@ void Error_Handler(void);
 #define OTG_FS_PowerSwitchOn_GPIO_Port GPIOC
 #define PDM_OUT_Pin GPIO_PIN_3
 #define PDM_OUT_GPIO_Port GPIOC
+#define KEY_BUTTON_Pin GPIO_PIN_0
+#define KEY_BUTTON_GPIO_Port GPIOA
+#define KEY_BUTTON_EXTI_IRQn EXTI0_IRQn
 #define I2S3_WS_Pin GPIO_PIN_4
 #define I2S3_WS_GPIO_Port GPIOA
 #define SPI1_SCK_Pin GPIO_PIN_5

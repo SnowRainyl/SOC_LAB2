@@ -21,8 +21,8 @@
 #include "dma.h"
 #include "i2c.h"
 #include "i2s.h"
-#include "tim.h"
 #include "spi.h"
+#include "tim.h"
 #include "usb_device.h"
 #include "gpio.h"
 
@@ -65,12 +65,22 @@
 const uint8_t ISR_FLAG_RX    = 0x01;  // Received data
 const uint8_t ISR_FLAG_TIM10 = 0x02;  // Timer 10 Period elapsed
 const uint8_t ISR_FLAG_TIM11 = 0x04;  // Timer 10 Period elapsed
-
+/*changereq*/
 extern TIM_HandleTypeDef htim10;
 extern volatile uint8_t isr_flags;
 volatile uint32_t pwm_period = 5000; // 
 volatile float duty_cycle = 0.5f;    // initial 50%
 volatile uint8_t led_state = 0;      // 0:off, 1:on
+
+/*PWM_manual_control*/
+const uint8_t ISR_FLAG_BTN = 0x08;
+const uint8_t CMD_PWM_MAN[] = "pwmman"; // Enter manual mode command
+volatile uint8_t pwm_mode_manual = 0;   // 0:auto, 1:manual
+volatile uint32_t btn_start_time = 0;  // Button press start time
+
+
+
+
 // This is the only variable that we will modify both in the ISR and in the main loop
 // It has to be declared volatile to prevent the compiler from optimizing it out.
 volatile uint8_t isr_flags = 0;
@@ -170,10 +180,15 @@ int main(void)
     /* USER CODE BEGIN 3 */
 
     if (isr_flags & ISR_FLAG_TIM10)
-{
-    isr_flags &= ~ISR_FLAG_TIM10;
-    handle_timer10_pwm();
-}
+    {
+      isr_flags &= ~ISR_FLAG_TIM10;
+      handle_timer10_pwm();
+    }
+    if (isr_flags & ISR_FLAG_BTN)
+    {
+      isr_flags &= ~ISR_FLAG_BTN;
+      handle_button();
+    }
   }
   /* USER CODE END 3 */
 }
@@ -293,6 +308,38 @@ void handle_timer10_pwm(void)
         __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * (1.0f - duty_cycle)));
     }
 }
+/*PWM_manual_control*/
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == KEY_BUTTON_Pin) {
+        isr_flags |= ISR_FLAG_BTN; // Tell main loop that button was pressed
+    }
+}
+void handle_button(void)
+{
+    // Read button state (PA0 high level means pressed)
+    if (HAL_GPIO_ReadPin(KEY_BUTTON_GPIO_Port, KEY_BUTTON_Pin) == GPIO_PIN_SET) 
+    {
+        // Pressed: record start time
+        btn_start_time = HAL_GetTick();
+    }
+    else 
+    {
+        // Released: calculate duration
+        uint32_t duration = HAL_GetTick() - btn_start_time;
+        
+        // If in manual mode and pressed long enough (>100ms debounce)
+        if (pwm_mode_manual && duration > 100) {
+            // Convert milliseconds to timer counts (10kHz timer, 1ms = 10 ticks)
+            pwm_period = duration * 10; 
+            pwm_mode_manual = 0; // Switch back to automatic mode after change (optional)
+            
+            char msg[32];
+            sprintf(msg, "New Period: %lu ticks\r\n", pwm_period);
+            CDC_Transmit_FS((uint8_t*)msg, strlen(msg));
+        }
+    }
+}
 
 /**
 * @brief  Handle possible new command
@@ -340,6 +387,11 @@ void handle_new_line()
     
     CDC_Transmit_FS((uint8_t*)"Duty Changed\r\n", 14);
   }
+  else if (memcmp(line_ready_buffer, CMD_PWM_MAN, sizeof(CMD_PWM_MAN)-1) == 0)
+{
+    pwm_mode_manual = 1;
+    CDC_Transmit_FS((uint8_t*)"Manual Mode: Hold Button\r\n", 26);
+}
   else
   {
     // If we receive an unknown command, we send an error message back to the PC

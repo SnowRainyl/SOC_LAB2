@@ -74,10 +74,14 @@ volatile uint8_t led_state = 0;      // 0:off, 1:on
 
 /*PWM_manual_control*/
 const uint8_t ISR_FLAG_BTN = 0x08;
-const uint8_t CMD_PWM_MAN[] = "pwmman"; // Enter manual mode command
+const uint8_t COMMAND_PWM_MAN[] = "pwmman"; // Enter manual mode command
 volatile uint8_t pwm_mode_manual = 0;   // 0:auto, 1:manual
 volatile uint32_t btn_start_time = 0;  // Button press start time
-
+/*acc*/
+extern TIM_HandleTypeDef htim11;
+const uint8_t COMMAND_ACC_ON[] = "accon";
+const uint8_t COMMAND_ACC_OFF[] = "accoff";
+volatile uint8_t acc_enabled = 0;
 
 
 
@@ -152,9 +156,13 @@ int main(void)
   MX_SPI1_Init();
   MX_USB_DEVICE_Init();
   MX_TIM10_Init();
+  MX_TIM11_Init();
   /* USER CODE BEGIN 2 */
 
-  HAL_TIM_Base_Start_IT(&htim10);
+  HAL_TIM_Base_Start_IT(&htim10);//pwm
+
+  HAL_TIM_Base_Start_IT(&htim11);//acc
+  BSP_ACCELERO_Init();
 
   /* USER CODE END 2 */
 
@@ -189,6 +197,13 @@ int main(void)
       isr_flags &= ~ISR_FLAG_BTN;
       handle_button();
     }
+    /*acc*/
+    if (isr_flags & ISR_FLAG_TIM11)
+    {
+        isr_flags &= ~ISR_FLAG_TIM11; // Clear flag
+        handle_accel();               // Call handler
+    }
+    
   }
   /* USER CODE END 3 */
 }
@@ -286,13 +301,20 @@ void CDC_ReceiveCallBack(uint8_t *buf, uint32_t len)
   }
 }
 
-/*PWM_changefreq*/
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
+    /*PWM_changefreq*/
     if (htim->Instance == TIM10) {
         isr_flags |= ISR_FLAG_TIM10; // only set the flag, quickly exit interrupt
     }
+    /*acc*/
+    if (htim->Instance == TIM11) {
+    isr_flags |= ISR_FLAG_TIM11;
+    }
+
 }
+/*PWM_changefreq*/
 void handle_timer10_pwm(void)
 {
     led_state = !led_state; // toggle state
@@ -315,6 +337,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
         isr_flags |= ISR_FLAG_BTN; // Tell main loop that button was pressed
     }
 }
+/*PWM_manual_control*/
 void handle_button(void)
 {
     // Read button state (PA0 high level means pressed)
@@ -338,6 +361,31 @@ void handle_button(void)
             sprintf(msg, "New Period: %lu ticks\r\n", pwm_period);
             CDC_Transmit_FS((uint8_t*)msg, strlen(msg));
         }
+    }
+}
+/*acc*/
+void handle_accel(void)
+{
+    if (acc_enabled == 0) return;
+
+    int16_t buffer[3] = {0};
+    BSP_ACCELERO_GetXYZ(buffer); // read X, Y, Z
+
+    int16_t x = buffer[0];
+    int16_t y = buffer[1];
+
+    // Turn off all indicator LEDs (PD13,14,15), keep PWM LED (PD12) if not conflicting
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
+
+    // Simple judgment logic (threshold 1000)
+    if (abs(x) > abs(y) && abs(x) > 1000) {
+        // X-axis tilt, light up PD14 (red) or others
+        if(x < 0) HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET); 
+    } 
+    else if (abs(y) > abs(x) && abs(y) > 1000) {
+        // Y-axis tilt, light up PD13 (orange) or PD15 (blue)
+        if(y > 0) HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
+        else      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
     }
 }
 
@@ -387,11 +435,27 @@ void handle_new_line()
     
     CDC_Transmit_FS((uint8_t*)"Duty Changed\r\n", 14);
   }
-  else if (memcmp(line_ready_buffer, CMD_PWM_MAN, sizeof(CMD_PWM_MAN)-1) == 0)
-{
+  else if (memcmp(line_ready_buffer, COMMAND_PWM_MAN, sizeof(COMMAND_PWM_MAN)-1) == 0)
+  {
     pwm_mode_manual = 1;
     CDC_Transmit_FS((uint8_t*)"Manual Mode: Hold Button\r\n", 26);
-}
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_ACC_ON, sizeof(COMMAND_ACC_ON)-1) == 0)
+  {
+    acc_enabled = 1; 
+    CDC_Transmit_FS((uint8_t*)"ACC ON\r\n", 8);
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_ACC_OFF, sizeof(COMMAND_ACC_OFF)-1) == 0)
+  {
+    acc_enabled = 0; 
+    
+    // turn off LED (PD13, PD14, PD15)
+    // note：don't turn off PD12, it belongs to the PWM blinking LED
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
+    
+    CDC_Transmit_FS((uint8_t*)"ACC OFF\r\n", 9);
+  }
+
   else
   {
     // If we receive an unknown command, we send an error message back to the PC

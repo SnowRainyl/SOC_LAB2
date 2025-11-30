@@ -52,6 +52,11 @@
 #define SAMPLING_RATE 48000
 #define AUDIO_BUFFER_LENGTH SAMPLING_RATE / SLOW_SIN_FREQ
 
+/*audio*/
+#define AUDIO_BUF_SIZE 2048
+
+
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -68,7 +73,7 @@ const uint8_t ISR_FLAG_TIM11 = 0x04;  // Timer 10 Period elapsed
 /*changereq*/
 extern TIM_HandleTypeDef htim10;
 extern volatile uint8_t isr_flags;
-volatile uint32_t pwm_period = 5000; // 
+volatile uint32_t pwm_period = 20000; // 
 volatile float duty_cycle = 0.5f;    // initial 50%
 volatile uint8_t led_state = 0;      // 0:off, 1:on
 
@@ -83,7 +88,9 @@ const uint8_t COMMAND_ACC_ON[] = "accon";
 const uint8_t COMMAND_ACC_OFF[] = "accoff";
 volatile uint8_t acc_enabled = 0;
 
-
+/*audio*/
+const uint8_t COMMAND_MUTE[] = "mute";
+const uint8_t COMMAND_UNMUTE[] = "unmute";
 
 // This is the only variable that we will modify both in the ISR and in the main loop
 // It has to be declared volatile to prevent the compiler from optimizing it out.
@@ -99,6 +106,7 @@ static uint8_t line_ready_buffer[LINE_BUFFER_SIZE]; // Stable buffer for main
 // Audio buffer
 int16_t buffer_audio[2 * AUDIO_BUFFER_LENGTH];
 
+int16_t audio_buffer[AUDIO_BUF_SIZE];// the new buffer I set
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -163,6 +171,12 @@ int main(void)
 
   HAL_TIM_Base_Start_IT(&htim11);//acc
   BSP_ACCELERO_Init();
+  
+  /*audio*/
+  update_audio_buffer(); 
+  cs43l22_init();
+  cs43l22_play(audio_buffer, AUDIO_BUF_SIZE);
+
 
   /* USER CODE END 2 */
 
@@ -322,11 +336,9 @@ void handle_timer10_pwm(void)
     // That is PD12 (Green LED)
     if (led_state) {
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
-        // Next interrupt time = period * duty cycle
         __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * duty_cycle));
     } else {
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
-        // Next interrupt time = period * (1 - duty cycle)
         __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * (1.0f - duty_cycle)));
     }
 }
@@ -340,7 +352,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 /*PWM_manual_control*/
 void handle_button(void)
 {
-    // Read button state (PA0 high level means pressed)
+    // Read button state
     if (HAL_GPIO_ReadPin(KEY_BUTTON_GPIO_Port, KEY_BUTTON_Pin) == GPIO_PIN_SET) 
     {
         // Pressed: record start time
@@ -351,7 +363,7 @@ void handle_button(void)
         // Released: calculate duration
         uint32_t duration = HAL_GetTick() - btn_start_time;
         
-        // If in manual mode and pressed long enough (>100ms debounce)
+        // pressed and debounce
         if (pwm_mode_manual && duration > 100) {
             // Convert milliseconds to timer counts (10kHz timer, 1ms = 10 ticks)
             pwm_period = duration * 10; 
@@ -362,6 +374,7 @@ void handle_button(void)
             CDC_Transmit_FS((uint8_t*)msg, strlen(msg));
         }
     }
+    update_audio_buffer();
 }
 /*acc*/
 void handle_accel(void)
@@ -377,7 +390,7 @@ void handle_accel(void)
     // Turn off all indicator LEDs (PD13,14,15), keep PWM LED (PD12) if not conflicting
     HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
 
-    // Simple judgment logic (threshold 1000)
+    // Simple judgment logic 
     if (abs(x) > abs(y) && abs(x) > 1000) {
         // X-axis tilt, light up PD14 (red) or others
         if(x < 0) HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET); 
@@ -400,20 +413,21 @@ void change_freq()
   switch (freq_state)
   {
     case 0:
-      pwm_period = 10000; // Slow
+      pwm_period = 20000; // Slow
       CDC_Transmit_FS((uint8_t*)"Frequency: Slow\r\n", 18);
       break;
     case 1:
-      pwm_period = 5000; // Medium
+      pwm_period = 10000; // Medium
       CDC_Transmit_FS((uint8_t*)"Frequency: Medium\r\n", 20);
       break;
     case 2:
-      pwm_period = 2000; // Fast
+      pwm_period = 5000; // Fast
       CDC_Transmit_FS((uint8_t*)"Frequency: Fast\r\n", 18);
       break;
     default:
       break;
   }
+  update_audio_buffer();
 }
 void handle_new_line()
 {
@@ -450,10 +464,27 @@ void handle_new_line()
     acc_enabled = 0; 
     
     // turn off LED (PD13, PD14, PD15)
-    // note：don't turn off PD12, it belongs to the PWM blinking LED
     HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
     
     CDC_Transmit_FS((uint8_t*)"ACC OFF\r\n", 9);
+  }
+
+  else if (memcmp(line_ready_buffer, COMMAND_MUTE, sizeof(COMMAND_MUTE)-1) == 0)
+  {
+    cs43l22_mute();
+    CDC_Transmit_FS((uint8_t*)"Muted\r\n", 7);
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_UNMUTE, sizeof(COMMAND_UNMUTE)-1) == 0)
+  {
+    cs43l22_unmute();
+    CDC_Transmit_FS((uint8_t*)"Unmuted\r\n", 9);
+  }
+
+  else if (memcmp(line_ready_buffer, "stop\r\n", 6) == 0) {
+    go_to_stop();
+  }
+  else if (memcmp(line_ready_buffer, "standby\r\n", 9) == 0) {
+    HAL_PWR_EnterSTANDBYMode(); 
   }
 
   else
@@ -464,16 +495,34 @@ void handle_new_line()
   
 }
 
+/*audio*/
+void update_audio_buffer(void)
+{
+   
+    float raw_freq = 10000000.0f / (float)pwm_period;
+    float time_samples = (float)(AUDIO_BUF_SIZE / 2); 
+    float cycles_in_buffer = raw_freq * time_samples / 48000.0f;
+    
+    cycles_in_buffer = floorf(cycles_in_buffer + 0.5f); 
+
+    if (cycles_in_buffer < 1.0f) cycles_in_buffer = 1.0f;
+
+    float snapped_freq = cycles_in_buffer * 48000.0f / time_samples;
+    
+    for(int i = 0; i < AUDIO_BUF_SIZE / 2; i++) 
+    {
+        int16_t val = (int16_t)(5000.0f * sinf(2.0f * 3.1415926f * snapped_freq * (float)i / 48000.0f));
+        
+        audio_buffer[2*i]     = val; // left
+        audio_buffer[2*i + 1] = val; // right
+    }
+}
+
 void init_codec_and_play()
 {
+  update_audio_buffer(); 
   cs43l22_init();
-  // sine signal
-  for(int i = 0; i < AUDIO_BUFFER_LENGTH;i++)
-  {
-    buffer_audio[2 * i] = 10000 * sin(2 * 3.14 * SLOW_SIN_FREQ * i / SAMPLING_RATE);
-    buffer_audio[2 * i + 1] = 10000 * sin(2 * 3.14 * SLOW_SIN_FREQ * i / SAMPLING_RATE);
-  }
-  cs43l22_play(buffer_audio, 2 * AUDIO_BUFFER_LENGTH);
+  cs43l22_play(audio_buffer, AUDIO_BUF_SIZE);
 }
 
 /**

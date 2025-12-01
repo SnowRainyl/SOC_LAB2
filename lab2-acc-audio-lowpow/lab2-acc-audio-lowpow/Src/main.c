@@ -44,14 +44,8 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define LINE_BUFFER_SIZE 256
-
 // macros to define the sine signal
-#define FAST_SIN_FREQ 1000
-#define SLOW_SIN_FREQ 500
-
 #define SAMPLING_RATE 48000
-#define AUDIO_BUFFER_LENGTH SAMPLING_RATE / SLOW_SIN_FREQ
-
 /*audio*/
 #define AUDIO_BUF_SIZE 2048
 
@@ -70,17 +64,20 @@
 const uint8_t ISR_FLAG_RX    = 0x01;  // Received data
 const uint8_t ISR_FLAG_TIM10 = 0x02;  // Timer 10 Period elapsed
 const uint8_t ISR_FLAG_TIM11 = 0x04;  // Timer 10 Period elapsed
+const uint8_t ISR_FLAG_BTN = 0x08;  // Button pressed
 /*changereq*/
 extern TIM_HandleTypeDef htim10;
 extern volatile uint8_t isr_flags;
-volatile uint32_t pwm_period = 20000; // 
+volatile uint32_t pwm_period = 5000; // 
 volatile float duty_cycle = 0.5f;    // initial 50%
 volatile uint8_t led_state = 0;      // 0:off, 1:on
 
 /*PWM_manual_control*/
-const uint8_t ISR_FLAG_BTN = 0x08;
+volatile uint8_t use_pwm_for_led = 1;
+
+
 const uint8_t COMMAND_PWM_MAN[] = "pwmman"; // Enter manual mode command
-volatile uint8_t pwm_mode_manual = 0;   // 0:auto, 1:manual
+volatile uint8_t pwm_mode_manual = 0;   // 0:auto set 3 levels , 1:press button to set period
 volatile uint32_t btn_start_time = 0;  // Button press start time
 /*acc*/
 extern TIM_HandleTypeDef htim11;
@@ -98,14 +95,21 @@ volatile uint8_t isr_flags = 0;
 // Commands that we will receive from the PC
 
 const uint8_t COMMAND_STOP[]        = "stop"; // Go to stop mode
+const uint8_t COMMAND_STANDBY[]    = "standby"; // Go to standby mode
 const uint8_t COMMAND_CHANGE_DUT[]  = "changedut";
 const uint8_t COMMAND_CHANGE_FREQ[] = "changefreq"; // Change the frequency
+
+
+/*LED manual control*/
+const uint8_t COMMAND_LED_PWM[] = "ledpwm";
+const uint8_t COMMAND_LED_MAN[] = "ledman";
+const uint8_t COMMAND_LED_ON[]  = "ledon";
+const uint8_t COMMAND_LED_OFF[] = "ledoff";
+
 // Buffer for command
 static uint8_t line_ready_buffer[LINE_BUFFER_SIZE]; // Stable buffer for main
 
 // Audio buffer
-int16_t buffer_audio[2 * AUDIO_BUFFER_LENGTH];
-
 int16_t audio_buffer[AUDIO_BUF_SIZE];// the new buffer I set
 /* USER CODE END PV */
 
@@ -168,7 +172,6 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   HAL_TIM_Base_Start_IT(&htim10);//pwm
-
   HAL_TIM_Base_Start_IT(&htim11);//acc
   BSP_ACCELERO_Init();
   
@@ -333,14 +336,19 @@ void handle_timer10_pwm(void)
 {
     led_state = !led_state; // toggle state
 
-    // That is PD12 (Green LED)
+
+
+  /* PWM control */
+  if (use_pwm_for_led == 1) 
+  {
     if (led_state) {
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
-        __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * duty_cycle));
+        __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * duty_cycle));//change ARR value
     } else {
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
-        __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * (1.0f - duty_cycle)));
+        __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * (1.0f - duty_cycle)));//change ARR value
     }
+  }
 }
 /*PWM_manual_control*/
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
@@ -357,6 +365,12 @@ void handle_button(void)
     {
         // Pressed: record start time
         btn_start_time = HAL_GetTick();
+
+        /*LED manual control*/
+        if (use_pwm_for_led == 0) {
+            HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
+        }
+   
     }
     else 
     {
@@ -367,11 +381,12 @@ void handle_button(void)
         if (pwm_mode_manual && duration > 100) {
             // Convert milliseconds to timer counts (10kHz timer, 1ms = 10 ticks)
             pwm_period = duration * 10; 
-            pwm_mode_manual = 0; // Switch back to automatic mode after change (optional)
+            pwm_mode_manual = 0; // Switch back to automatic mode after change
             
             char msg[32];
             sprintf(msg, "New Period: %lu ticks\r\n", pwm_period);
             CDC_Transmit_FS((uint8_t*)msg, strlen(msg));
+            use_pwm_for_led = 1;
         }
     }
     update_audio_buffer();
@@ -386,20 +401,24 @@ void handle_accel(void)
 
     int16_t x = buffer[0];
     int16_t y = buffer[1];
-
+    int16_t z = buffer[2];
     // Turn off all indicator LEDs (PD13,14,15), keep PWM LED (PD12) if not conflicting
     HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
 
-    // Simple judgment logic 
-    if (abs(x) > abs(y) && abs(x) > 1000) {
-        // X-axis tilt, light up PD14 (red) or others
-        if(x < 0) HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET); 
+    if (abs(x) > abs(y) && abs(x) > abs(z)) {
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET);
     } 
-    else if (abs(y) > abs(x) && abs(y) > 1000) {
-        // Y-axis tilt, light up PD13 (orange) or PD15 (blue)
-        if(y > 0) HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
-        else      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
+    else if (abs(y) > abs(x) && abs(y) > abs(z)) {
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
+    } 
+    else if (abs(z) > abs(x) && abs(z) > abs(y)) {
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
+    }    
+    else {
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
     }
+
+
 }
 
 /**
@@ -429,6 +448,7 @@ void change_freq()
   }
   update_audio_buffer();
 }
+
 void handle_new_line()
 {
   if (memcmp(line_ready_buffer, COMMAND_CHANGE_FREQ, sizeof(COMMAND_CHANGE_FREQ)) == 0)
@@ -442,7 +462,6 @@ void handle_new_line()
   }
   else if (memcmp(line_ready_buffer, COMMAND_CHANGE_DUT, sizeof(COMMAND_CHANGE_DUT)-1) == 0)
   {
-    // Change duty cycle: 50% -> 75% -> 25%
     if (duty_cycle == 0.5f) duty_cycle = 0.75f;
     else if (duty_cycle == 0.75f) duty_cycle = 0.25f;
     else duty_cycle = 0.5f;
@@ -462,10 +481,7 @@ void handle_new_line()
   else if (memcmp(line_ready_buffer, COMMAND_ACC_OFF, sizeof(COMMAND_ACC_OFF)-1) == 0)
   {
     acc_enabled = 0; 
-    
-    // turn off LED (PD13, PD14, PD15)
     HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
-    
     CDC_Transmit_FS((uint8_t*)"ACC OFF\r\n", 9);
   }
 
@@ -480,11 +496,35 @@ void handle_new_line()
     CDC_Transmit_FS((uint8_t*)"Unmuted\r\n", 9);
   }
 
-  else if (memcmp(line_ready_buffer, "stop\r\n", 6) == 0) {
-    go_to_stop();
-  }
-  else if (memcmp(line_ready_buffer, "standby\r\n", 9) == 0) {
+  else if (memcmp(line_ready_buffer, COMMAND_STANDBY, sizeof(COMMAND_STANDBY)-1) == 0) {
     HAL_PWR_EnterSTANDBYMode(); 
+  }
+
+  else if (memcmp(line_ready_buffer, COMMAND_LED_PWM, sizeof(COMMAND_LED_PWM)-1) == 0)
+  {
+    use_pwm_for_led = 1; // PWM 
+    CDC_Transmit_FS((uint8_t*)"LED Mode: PWM\r\n", 15);
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_LED_MAN, sizeof(COMMAND_LED_MAN)-1) == 0)
+  {
+    use_pwm_for_led = 0; // Manual
+    CDC_Transmit_FS((uint8_t*)"LED Mode: Manual\r\n", 18);
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_LED_ON, sizeof(COMMAND_LED_ON)-1) == 0)
+  {
+    // Only allow control in manual mode
+    if (use_pwm_for_led == 0) {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
+        CDC_Transmit_FS((uint8_t*)"LED ON\r\n", 8);
+    }
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_LED_OFF, sizeof(COMMAND_LED_OFF)-1) == 0)
+  {
+    // Only allow control in manual mode
+    if (use_pwm_for_led == 0) {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
+        CDC_Transmit_FS((uint8_t*)"LED OFF\r\n", 9);
+    }
   }
 
   else
@@ -499,7 +539,7 @@ void handle_new_line()
 void update_audio_buffer(void)
 {
    
-    float raw_freq = 10000000.0f / (float)pwm_period;
+    float raw_freq = 10000000.0f / (float)pwm_period; 
     float time_samples = (float)(AUDIO_BUF_SIZE / 2); 
     float cycles_in_buffer = raw_freq * time_samples / 48000.0f;
     

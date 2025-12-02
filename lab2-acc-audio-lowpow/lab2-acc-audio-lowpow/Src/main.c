@@ -74,16 +74,14 @@ volatile uint8_t led_state = 0;      // 0:off, 1:on
 
 /*PWM_manual_control*/
 volatile uint8_t use_pwm_for_led = 1;
-
-
 const uint8_t COMMAND_PWM_MAN[] = "pwmman"; // Enter manual mode command
 volatile uint8_t pwm_mode_manual = 0;   // 0:auto set 3 levels , 1:press button to set period
 volatile uint32_t btn_start_time = 0;  // Button press start time
 /*acc*/
-extern TIM_HandleTypeDef htim11;
+extern TIM_HandleTypeDef htim11;//acc
 const uint8_t COMMAND_ACC_ON[] = "accon";
 const uint8_t COMMAND_ACC_OFF[] = "accoff";
-volatile uint8_t acc_enabled = 0;
+volatile uint8_t acc_enabled = 0;//acc enable flag
 
 /*audio*/
 const uint8_t COMMAND_MUTE[] = "mute";
@@ -96,7 +94,7 @@ volatile uint8_t isr_flags = 0;
 
 const uint8_t COMMAND_STOP[]        = "stop"; // Go to stop mode
 const uint8_t COMMAND_STANDBY[]    = "standby"; // Go to standby mode
-const uint8_t COMMAND_CHANGE_DUT[]  = "changedut";
+const uint8_t COMMAND_CHANGE_DUT[]  = "changedut";// change duty cycle
 const uint8_t COMMAND_CHANGE_FREQ[] = "changefreq"; // Change the frequency
 
 
@@ -173,14 +171,12 @@ int main(void)
 
   HAL_TIM_Base_Start_IT(&htim10);//pwm
   HAL_TIM_Base_Start_IT(&htim11);//acc
-  BSP_ACCELERO_Init();
+  BSP_ACCELERO_Init();//acc init
   
   /*audio*/
   update_audio_buffer(); 
   cs43l22_init();
   cs43l22_play(audio_buffer, AUDIO_BUF_SIZE);
-
-
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -193,7 +189,6 @@ int main(void)
       // Go to sleep, waiting for interrupt (WFI).
       HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON,PWR_SLEEPENTRY_WFI);
     }
-
     // This is needed for the UART transmission 
     if (isr_flags & ISR_FLAG_RX)
     {
@@ -203,74 +198,33 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
+    //PWM_changefreq
     if (isr_flags & ISR_FLAG_TIM10)
     {
       isr_flags &= ~ISR_FLAG_TIM10;
       handle_timer10_pwm();
     }
+    //PWM_manual_control
     if (isr_flags & ISR_FLAG_BTN)
     {
       isr_flags &= ~ISR_FLAG_BTN;
       handle_button();
     }
-    /*acc*/
+    //acc
     if (isr_flags & ISR_FLAG_TIM11)
     {
-        isr_flags &= ~ISR_FLAG_TIM11; // Clear flag
-        handle_accel();               // Call handler
+        isr_flags &= ~ISR_FLAG_TIM11; 
+        handle_accel();              
     }
     
   }
   /* USER CODE END 3 */
 }
 
-/**
-  * @brief System Clock Configuration
-  * @retval None
-  */
-void SystemClock_Config(void)
-{
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-
-  /** Configure the main internal regulator output voltage
-  */
-  __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
-
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 8;
-  RCC_OscInitStruct.PLL.PLLN = 336;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 7;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
-
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
-  {
-    Error_Handler();
-  }
-}
 
 /* USER CODE BEGIN 4 */
+/*set interrupt flags*/
+
 
 // All of this is used to manage commands from serial interface
 static uint8_t line_buffer[LINE_BUFFER_SIZE];
@@ -317,13 +271,12 @@ void CDC_ReceiveCallBack(uint8_t *buf, uint32_t len)
     memmove(line_buffer, line_buffer + processed, line_len);
   }
 }
-
-
+//set tim10 and tim11 interrupt flag
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     /*PWM_changefreq*/
     if (htim->Instance == TIM10) {
-        isr_flags |= ISR_FLAG_TIM10; // only set the flag, quickly exit interrupt
+        isr_flags |= ISR_FLAG_TIM10; 
     }
     /*acc*/
     if (htim->Instance == TIM11) {
@@ -331,33 +284,131 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     }
 
 }
-/*PWM_changefreq*/
+//Set button interrupt flag
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == KEY_BUTTON_Pin) {
+        isr_flags |= ISR_FLAG_BTN; 
+    }
+}
+
+
+
+/**
+* @brief  Handle possible new command
+* @retval None
+*/
+
+//process new command
+void handle_new_line()
+{
+  if (memcmp(line_ready_buffer, COMMAND_CHANGE_FREQ, sizeof(COMMAND_CHANGE_FREQ)) == 0)
+  {
+    CDC_Transmit_FS((uint8_t*)"Change Frequency\r\n", 18);
+    change_freq();
+
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_CHANGE_DUT, sizeof(COMMAND_CHANGE_DUT)) == 0)
+  {
+    if (duty_cycle == 0.5f) duty_cycle = 0.75f;
+    else if (duty_cycle == 0.75f) duty_cycle = 0.25f;
+    else duty_cycle = 0.5f;
+    
+    CDC_Transmit_FS((uint8_t*)"Duty Changed\r\n", 14);
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_PWM_MAN, sizeof(COMMAND_PWM_MAN)) == 0)
+  {
+    pwm_mode_manual = 1;
+    CDC_Transmit_FS((uint8_t*)"Manual Mode: Hold Button\r\n", 26);
+  }
+  
+  else if (memcmp(line_ready_buffer, COMMAND_ACC_ON, sizeof(COMMAND_ACC_ON)) == 0)
+  {
+    acc_enabled = 1; 
+    CDC_Transmit_FS((uint8_t*)"ACC ON\r\n", 8);
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_ACC_OFF, sizeof(COMMAND_ACC_OFF)) == 0)
+  {
+    acc_enabled = 0; 
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
+    CDC_Transmit_FS((uint8_t*)"ACC OFF\r\n", 9);
+  }
+
+  else if (memcmp(line_ready_buffer, COMMAND_MUTE, sizeof(COMMAND_MUTE)) == 0)
+  {
+    cs43l22_mute();
+    CDC_Transmit_FS((uint8_t*)"Muted\r\n", 7);
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_UNMUTE, sizeof(COMMAND_UNMUTE)) == 0)
+  {
+    cs43l22_unmute();
+    CDC_Transmit_FS((uint8_t*)"Unmuted\r\n", 9);
+  }
+ 
+  else if (memcmp(line_ready_buffer, COMMAND_LED_PWM, sizeof(COMMAND_LED_PWM)) == 0)
+  {
+    use_pwm_for_led = 1; // PWM 
+    CDC_Transmit_FS((uint8_t*)"LED Mode: PWM\r\n", 15);
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_LED_MAN, sizeof(COMMAND_LED_MAN)) == 0)
+  {
+    use_pwm_for_led = 0; // Manual
+    CDC_Transmit_FS((uint8_t*)"LED Mode: Manual\r\n", 18);
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_LED_ON, sizeof(COMMAND_LED_ON)) == 0)
+  {
+    // Only allow control in manual mode
+    if (use_pwm_for_led == 0) {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
+        CDC_Transmit_FS((uint8_t*)"LED ON\r\n", 8);
+    }
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_LED_OFF, sizeof(COMMAND_LED_OFF)) == 0)
+  {
+    // Only allow control in manual mode
+    if (use_pwm_for_led == 0) {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
+        CDC_Transmit_FS((uint8_t*)"LED OFF\r\n", 9);
+    }
+  }
+
+  else if (memcmp(line_ready_buffer, COMMAND_STOP, sizeof(COMMAND_STOP)) == 0)
+  {
+    CDC_Transmit_FS((uint8_t*)"STOP mode\r\n", 11);
+    go_to_stop();
+  }
+  else if (memcmp(line_ready_buffer, COMMAND_STANDBY, sizeof(COMMAND_STANDBY)) == 0) {
+    CDC_Transmit_FS((uint8_t*)"Standby\r\n", 9);
+    HAL_PWR_EnterSTANDBYMode(); 
+  }
+  else
+  {
+    // If we receive an unknown command, we send an error message back to the PC
+    CDC_Transmit_FS((uint8_t*)"Unknown command\r\n", 17);
+  }
+}
+
+//PWM handler
 void handle_timer10_pwm(void)
 {
     led_state = !led_state; // toggle state
-
-
-
   /* PWM control */
   if (use_pwm_for_led == 1) 
   {
+    //base on current led_state to set the pin and ARR(off set 1-duty, on set duty)
     if (led_state) {
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
         __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * duty_cycle));//change ARR value
+        //pwm_period: changefreq and button set
+        //duty_cycle: changedut command set
     } else {
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
         __HAL_TIM_SET_AUTORELOAD(&htim10, (uint32_t)(pwm_period * (1.0f - duty_cycle)));//change ARR value
     }
   }
 }
-/*PWM_manual_control*/
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-    if (GPIO_Pin == KEY_BUTTON_Pin) {
-        isr_flags |= ISR_FLAG_BTN; // Tell main loop that button was pressed
-    }
-}
-/*PWM_manual_control*/
+
+//PWM_manual_control
 void handle_button(void)
 {
     // Read button state
@@ -379,10 +430,12 @@ void handle_button(void)
         
         // pressed and debounce
         if (pwm_mode_manual && duration > 100) {
+
+            //168Mhz/ (16799+1) = 10,000Hz (10 kHz)。
             // Convert milliseconds to timer counts (10kHz timer, 1ms = 10 ticks)
             pwm_period = duration * 10; 
             pwm_mode_manual = 0; // Switch back to automatic mode after change
-            
+            __HAL_TIM_SET_AUTORELOAD(&htim10, pwm_period);//ARR update
             char msg[32];
             sprintf(msg, "New Period: %lu ticks\r\n", pwm_period);
             CDC_Transmit_FS((uint8_t*)msg, strlen(msg));
@@ -391,7 +444,8 @@ void handle_button(void)
     }
     update_audio_buffer();
 }
-/*acc*/
+
+//accelometer handling
 void handle_accel(void)
 {
     if (acc_enabled == 0) return;
@@ -421,10 +475,7 @@ void handle_accel(void)
 
 }
 
-/**
-* @brief  Handle possible new command
-* @retval None
-*/
+//PWM_changefreq_fixed_3levels
 void change_freq()
 {
   static uint8_t freq_state = 0;
@@ -449,93 +500,7 @@ void change_freq()
   update_audio_buffer();
 }
 
-void handle_new_line()
-{
-  if (memcmp(line_ready_buffer, COMMAND_CHANGE_FREQ, sizeof(COMMAND_CHANGE_FREQ)) == 0)
-  {
-    change_freq();
-  }
-
-  else if (memcmp(line_ready_buffer, COMMAND_STOP, sizeof(COMMAND_STOP)) == 0)
-  {
-    go_to_stop();
-  }
-  else if (memcmp(line_ready_buffer, COMMAND_CHANGE_DUT, sizeof(COMMAND_CHANGE_DUT)-1) == 0)
-  {
-    if (duty_cycle == 0.5f) duty_cycle = 0.75f;
-    else if (duty_cycle == 0.75f) duty_cycle = 0.25f;
-    else duty_cycle = 0.5f;
-    
-    CDC_Transmit_FS((uint8_t*)"Duty Changed\r\n", 14);
-  }
-  else if (memcmp(line_ready_buffer, COMMAND_PWM_MAN, sizeof(COMMAND_PWM_MAN)-1) == 0)
-  {
-    pwm_mode_manual = 1;
-    CDC_Transmit_FS((uint8_t*)"Manual Mode: Hold Button\r\n", 26);
-  }
-  else if (memcmp(line_ready_buffer, COMMAND_ACC_ON, sizeof(COMMAND_ACC_ON)-1) == 0)
-  {
-    acc_enabled = 1; 
-    CDC_Transmit_FS((uint8_t*)"ACC ON\r\n", 8);
-  }
-  else if (memcmp(line_ready_buffer, COMMAND_ACC_OFF, sizeof(COMMAND_ACC_OFF)-1) == 0)
-  {
-    acc_enabled = 0; 
-    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
-    CDC_Transmit_FS((uint8_t*)"ACC OFF\r\n", 9);
-  }
-
-  else if (memcmp(line_ready_buffer, COMMAND_MUTE, sizeof(COMMAND_MUTE)-1) == 0)
-  {
-    cs43l22_mute();
-    CDC_Transmit_FS((uint8_t*)"Muted\r\n", 7);
-  }
-  else if (memcmp(line_ready_buffer, COMMAND_UNMUTE, sizeof(COMMAND_UNMUTE)-1) == 0)
-  {
-    cs43l22_unmute();
-    CDC_Transmit_FS((uint8_t*)"Unmuted\r\n", 9);
-  }
-
-  else if (memcmp(line_ready_buffer, COMMAND_STANDBY, sizeof(COMMAND_STANDBY)-1) == 0) {
-    HAL_PWR_EnterSTANDBYMode(); 
-  }
-
-  else if (memcmp(line_ready_buffer, COMMAND_LED_PWM, sizeof(COMMAND_LED_PWM)-1) == 0)
-  {
-    use_pwm_for_led = 1; // PWM 
-    CDC_Transmit_FS((uint8_t*)"LED Mode: PWM\r\n", 15);
-  }
-  else if (memcmp(line_ready_buffer, COMMAND_LED_MAN, sizeof(COMMAND_LED_MAN)-1) == 0)
-  {
-    use_pwm_for_led = 0; // Manual
-    CDC_Transmit_FS((uint8_t*)"LED Mode: Manual\r\n", 18);
-  }
-  else if (memcmp(line_ready_buffer, COMMAND_LED_ON, sizeof(COMMAND_LED_ON)-1) == 0)
-  {
-    // Only allow control in manual mode
-    if (use_pwm_for_led == 0) {
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
-        CDC_Transmit_FS((uint8_t*)"LED ON\r\n", 8);
-    }
-  }
-  else if (memcmp(line_ready_buffer, COMMAND_LED_OFF, sizeof(COMMAND_LED_OFF)-1) == 0)
-  {
-    // Only allow control in manual mode
-    if (use_pwm_for_led == 0) {
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
-        CDC_Transmit_FS((uint8_t*)"LED OFF\r\n", 9);
-    }
-  }
-
-  else
-  {
-    // If we receive an unknown command, we send an error message back to the PC
-    CDC_Transmit_FS((uint8_t*)"Unknown command\r\n", 17);
-  }
-  
-}
-
-/*audio*/
+// Generate audio buffer based on current pwm_period
 void update_audio_buffer(void)
 {
    
@@ -557,7 +522,7 @@ void update_audio_buffer(void)
         audio_buffer[2*i + 1] = val; // right
     }
 }
-
+// Initialize codec and start playback
 void init_codec_and_play()
 {
   update_audio_buffer(); 
@@ -593,11 +558,19 @@ void go_to_stop()
 
   // Required otherwise the audio wont work after wakeup
   MX_I2S3_Init();
+  MX_USB_DEVICE_Init();
 
   init_codec_and_play();
 }
-
 /* USER CODE END 4 */
+
+
+
+
+
+
+
+
 
 /**
   * @brief  This function is executed in case of error occurrence.
@@ -629,3 +602,48 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Configure the main internal regulator output voltage
+  */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = 8;
+  RCC_OscInitStruct.PLL.PLLN = 336;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = 7;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
